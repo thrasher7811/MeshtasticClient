@@ -1,0 +1,5 @@
+meshtastic
+customtkinter>=5.2.0
+tkintermapview>=1.29
+Pillow>=9.0.0
+pyserial>=3.5
