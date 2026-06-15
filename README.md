@@ -81,10 +81,10 @@ python3 main.py
 2. Click **Connect** in the sidebar
 3. Choose **Serial/USB** (select your COM port) or **TCP/Network** (enter IP:4403)
 4. Navigate using the sidebar:
-   - **💬 Messages** — Send/receive channel messages and direct messages
-   - **🗺 Map** — View node locations on an interactive map
-   - **📡 Nodes** — Browse all discovered nodes with detailed telemetry
-   - **⚙ Settings** — Configure your device (Device, LoRa, Channels, Modules)
+   - ** Messages** — Send/receive channel messages and direct messages
+   - ** Map** — View node locations on an interactive map
+   - ** Nodes** — Browse all discovered nodes with detailed telemetry
+   - ** Settings** — Configure your device (Device, LoRa, Channels, Modules)
 5. Click **Disconnect** to safely disconnect from the device
 
 ## Connection Methods
