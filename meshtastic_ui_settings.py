@@ -718,6 +718,7 @@ class ChannelEditDialog(ctk.CTkToplevel):
     def __init__(self, parent, channel: dict = None, **kwargs):
         super().__init__(parent, **kwargs)
         self.result = None
+        self._generated_psk = None
         ch = channel or {}
         is_new = (ch.get("role", 0) == 0)
 
@@ -820,6 +821,11 @@ class ChannelEditDialog(ctk.CTkToplevel):
 
     def _save(self):
         name = self._name_entry.get().strip()
+        
+        if not name:
+            self._show_error("Channel name cannot be empty.")
+            return
+        
         role = 1 if self._is_primary else 2  # PRIMARY=1, SECONDARY=2
         psk_type = self._psk_type.get()
 
@@ -987,8 +993,12 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
             return
         dlg = ChannelEditDialog(self, channel=empty_slot)
         self.wait_window(dlg)
+        print(f"DEBUG: Dialog closed. dlg.result = {dlg.result}")
         if dlg.result:
+            print(f"DEBUG: Calling _save_channel with index={empty_slot['index']}, result={dlg.result}")
             self._save_channel(empty_slot["index"], dlg.result)
+        else:
+            print(f"DEBUG: No result from dialog")
 
     def _edit_channel(self, ch: dict):
         if not self.connection.is_connected:
@@ -1005,13 +1015,17 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
         def _do():
             ok, msg = self.connection.save_channel(
                 index, result["name"], result["role"], result["psk_bytes"])
+            if ok:
+                msg = f"✓ {msg}"
+            else:
+                msg = f"✗ {msg}"
             color = "green" if ok else "red"
             if ok:
                 # Reload channels from device
                 channels = self.connection.get_channels()
                 self.after(0, lambda: self.load_channels(channels))
-            self.after(0, self._status.configure, {"text": msg, "text_color": color})
-            self.after(5000, self._status.configure, {"text": "", "text_color": "gray"})
+            self.after(0, lambda: self._status.configure(text=msg, text_color=color))
+            self.after(5000, lambda: self._status.configure(text="", text_color="gray"))
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1026,12 +1040,16 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
 
         def _do():
             ok, msg = self.connection.delete_channel(idx)
+            if ok:
+                msg = f"✓ {msg}"
+            else:
+                msg = f"✗ {msg}"
             color = "green" if ok else "red"
             if ok:
                 channels = self.connection.get_channels()
                 self.after(0, lambda: self.load_channels(channels))
-            self.after(0, self._status.configure, {"text": msg, "text_color": color})
-            self.after(5000, self._status.configure, {"text": "", "text_color": "gray"})
+            self.after(0, lambda: self._status.configure(text=msg, text_color=color))
+            self.after(5000, lambda: self._status.configure(text="", text_color="gray"))
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1297,7 +1315,7 @@ class SettingsView(ctk.CTkFrame):
             self.after(0, _apply)
 
         threading.Thread(target=_do_load, daemon=True).start()
-
+    
     def on_connected(self):
         """Called when device connects — load all config from device."""
         self.actions_tab.update_connection_state(True)
@@ -1339,9 +1357,14 @@ class SettingsView(ctk.CTkFrame):
             else:
                 ok, msg = False, "Unknown tab"
 
+            if ok:
+                msg = f"✓ {msg}"
+            else:
+                msg = f"✗ {msg}"
+
             color = "green" if ok else "red"
-            self.after(0, self.status_label.configure, {"text": msg, "text_color": color})
+            self.after(0, lambda: self.status_label.configure(text=msg, text_color=color))
             # Clear status after 5s
-            self.after(5000, self.status_label.configure, {"text": "", "text_color": "gray"})
+            self.after(5000, lambda: self.status_label.configure(text="", text_color="gray"))
 
         threading.Thread(target=_do_save, daemon=True).start()

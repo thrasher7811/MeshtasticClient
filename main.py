@@ -70,7 +70,6 @@ def main():
     try:
         from meshtastic_app import MeshtasticApp
         app = MeshtasticApp()
-        app.protocol("WM_DELETE_WINDOW", app.on_closing)
         app.mainloop()
     except KeyboardInterrupt:
         logger.info("Application closed by user.")

@@ -214,6 +214,9 @@ class MeshtasticApp(ctk.CTk):
 
         self._current_page = "Messages"
 
+        # Set window close handler
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
         self._build_ui()
         self._navigate("Messages")
 
@@ -349,7 +352,21 @@ class MeshtasticApp(ctk.CTk):
             self.log_btn.configure(text="Log ▲")
 
     def on_closing(self):
-        """Clean up on window close."""
-        if self.connection.is_connected:
-            self.connection.disconnect()
-        self.destroy()
+        """Clean up and properly close the entire application window."""
+        print("[DEBUG] on_closing() called")
+        try:
+            if self.connection and self.connection.is_connected:
+                print("[DEBUG] Disconnecting from device...")
+                try:
+                    self.connection.disconnect()
+                    print("[DEBUG] Disconnect successful")
+                except Exception as e:
+                    print(f"[DEBUG] Disconnect error: {e}")
+            print("[DEBUG] Sleeping before exit...")
+            import time
+            time.sleep(0.1)
+        finally:
+            # Force exit without destroy - skip widget cleanup to avoid customtkinter bugs
+            print("[DEBUG] Calling os._exit(0)...")
+            import os
+            os._exit(0)

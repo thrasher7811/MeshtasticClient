@@ -5,8 +5,66 @@ Supports multi-channel chat and direct messages.
 
 import time
 import customtkinter as ctk
-from typing import Optional, List, Dict
-from meshtastic_core import MeshConnection, MeshMessage, ConnectionState
+from typing import Optional, List, Dict, Callable
+from meshtastic_core import MeshConnection, MeshMessage, ConnectionState, MeshNode
+
+
+class DirectMessageCard(ctk.CTkFrame):
+    """Card widget for a node in the Direct Messages list."""
+
+    def __init__(self, parent, node: MeshNode, on_select: Optional[Callable] = None, **kwargs):
+        super().__init__(parent, corner_radius=6, **kwargs)
+        self.node = node
+        self.on_select = on_select
+        self._build_ui()
+        self.bind("<Button-1>", self._clicked)
+
+    def _clicked(self, event=None):
+        if self.on_select:
+            self.on_select(self.node.num, self.node.long_name or self.node.short_name)
+
+    def _bind_children(self, widget):
+        """Recursively bind click to all child widgets so the whole card is clickable."""
+        widget.bind("<Button-1>", self._clicked)
+        for child in widget.winfo_children():
+            self._bind_children(child)
+
+    def _build_ui(self):
+        self.grid_columnconfigure(1, weight=1)
+
+        # Avatar
+        avatar = ctk.CTkFrame(self, width=32, height=32,
+                              corner_radius=16,
+                              fg_color="#2d8a4e")
+        avatar.grid(row=0, column=0, rowspan=2, padx=(8, 8), pady=6, sticky="w")
+        avatar.grid_propagate(False)
+
+        short = self.node.short_name[:2] if self.node.short_name else "?"
+        ctk.CTkLabel(avatar, text=short,
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+
+        # Node name
+        ctk.CTkLabel(self, text=self.node.long_name or f"!{self.node.num:08x}",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     anchor="w").grid(row=0, column=1, sticky="w", padx=(0, 8), pady=(6, 0))
+
+        # Status row: SNR, last heard
+        status_frame = ctk.CTkFrame(self, fg_color="transparent")
+        status_frame.grid(row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 6))
+
+        status_text = ""
+        if self.node.snr is not None:
+            status_text += f"SNR {self.node.snr:.1f}dB"
+        status_text += f"  ⏱ {self.node.last_heard_str}"
+
+        ctk.CTkLabel(status_frame, text=status_text,
+                     font=ctk.CTkFont(size=10),
+                     text_color="gray").pack(side="left")
+
+        # Bind clicks on all child widgets
+        self.after(0, lambda: self._bind_children(self))
+        self.configure(cursor="hand2")
 
 
 class MessagesView(ctk.CTkFrame):
@@ -68,10 +126,17 @@ class MessagesView(ctk.CTkFrame):
         self.header = ctk.CTkFrame(self.right_panel, height=48, corner_radius=0)
         self.header.grid(row=0, column=0, sticky="ew")
         self.header.grid_columnconfigure(0, weight=1)
+        self.header.grid_columnconfigure(1, weight=1)
+        
         self.header_label = ctk.CTkLabel(
             self.header, text="# Primary",
             font=ctk.CTkFont(size=15, weight="bold"), anchor="w")
         self.header_label.grid(row=0, column=0, padx=16, pady=12, sticky="w")
+        
+        refresh_btn = ctk.CTkButton(
+            self.header, text="↻", width=36, height=24,
+            command=self._manual_refresh_nodes)
+        refresh_btn.grid(row=0, column=1, padx=(0, 12), pady=12, sticky="e")
 
         # Messages area
         self.msg_frame = ctk.CTkScrollableFrame(self.right_panel, corner_radius=0)
@@ -104,6 +169,11 @@ class MessagesView(ctk.CTkFrame):
         self.send_btn.grid(row=0, column=1, padx=(0, 12), pady=12)
 
         self._render_channel_list()
+        self._render_dm_list()
+
+    def _manual_refresh_nodes(self):
+        """Manually refresh the nodes list."""
+        self._refresh_nodes_from_connection()
 
     def _render_channel_list(self):
         """Render the channel buttons in the left panel."""
@@ -130,7 +200,7 @@ class MessagesView(ctk.CTkFrame):
             btn.pack(fill="x", padx=4, pady=2)
 
     def _render_dm_list(self):
-        """Render direct message buttons for known nodes."""
+        """Render direct message cards for known nodes."""
         for widget in self.dm_frame.winfo_children():
             widget.destroy()
 
@@ -158,21 +228,18 @@ class MessagesView(ctk.CTkFrame):
             if node_num_int == my_id:
                 continue
 
-            user = node_data.get("user", {})
-            name = user.get("longName") or user.get("shortName") or f"!{node_num_int:08x}"
+            # Create MeshNode from raw data for consistent display
+            node = MeshNode(node_data)
             is_active = (self._dm_node == node_num_int)
-            btn_color = ("gray75", "gray25") if is_active else ("transparent", "transparent")
-
-            btn = ctk.CTkButton(
-                self.dm_frame,
-                text=f"  {name}",
-                anchor="w",
-                fg_color=btn_color,
-                hover_color=("gray70", "gray30"),
-                text_color=("black", "white"),
-                command=lambda nid=node_num_int, n=name: self._select_dm(nid, n)
+            
+            card_bg = ("gray75", "gray30") if is_active else ("gray70", "gray20")
+            card = DirectMessageCard(
+                self.dm_frame, node,
+                on_select=self._select_dm,
+                fg_color=card_bg
             )
-            btn.pack(fill="x", padx=4, pady=2)
+            card.pack(fill="x", padx=4, pady=2)
+
 
     def _refresh_nodes_from_connection(self):
         """Refresh known nodes from the active connection."""
