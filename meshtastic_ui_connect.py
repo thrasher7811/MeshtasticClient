@@ -6,6 +6,7 @@ import threading
 import customtkinter as ctk
 from typing import Callable, Optional, List
 from meshtastic_core import MeshConnection, ConnectionState, ConnectionType
+from meshtastic_ui_settings import MeshConnection
 
 
 class ConnectionDialog(ctk.CTkToplevel):
@@ -160,6 +161,8 @@ class ConnectionDialog(ctk.CTkToplevel):
         self.connection.on_state_change = on_state
         self.connection.connect_serial(port)
         self._original_state_cb = old_cb
+        conn = MeshConnection()
+        conn._load_from_device()
 
     def _connect_tcp(self):
         host = self.host_entry.get().strip()

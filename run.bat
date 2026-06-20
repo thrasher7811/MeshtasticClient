@@ -1,5 +1,5 @@
 @echo off
-python main.py
+python3 main.py
 if %errorlevel% neq 0 (
     echo.
     echo Application exited with error.
