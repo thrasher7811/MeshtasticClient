@@ -8,7 +8,7 @@ import threading
 import base64
 import os
 import customtkinter as ctk
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Callable
 from meshtastic_core import MeshConnection
 
 # ---------------------------------------------------------------------------
@@ -863,9 +863,12 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
 
     MAX_CHANNELS = 8
 
-    def __init__(self, parent, connection: MeshConnection, **kwargs):
+    def __init__(self, parent, connection: MeshConnection,
+                 on_channels_changed: Optional[Callable[[List[Dict]], None]] = None,
+                 **kwargs):
         super().__init__(parent, **kwargs)
         self.connection = connection
+        self._on_channels_changed = on_channels_changed
         self._channels: list = []
         self.grid_columnconfigure(0, weight=1)
         self._build_ui()
@@ -983,22 +986,22 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
         if not self.connection.is_connected:
             self._status.configure(text="Not connected.", text_color="orange")
             return
-        # Find first empty slot
-        active = {ch["index"] for ch in self._channels if ch.get("role", 0) != 0}
-        empty_slot = next(
-            (ch for ch in self._channels if ch.get("role", 0) == 0 and ch["index"] > 0),
-            None)
-        if empty_slot is None:
+
+        # Refresh from device and pick the next available non-primary slot.
+        channels = self.connection.get_channels()
+        self.load_channels(channels)
+        next_slot = next(
+            (ch for ch in channels if ch.get("index", -1) > 0 and ch.get("role", 0) == 0),
+            None
+        )
+        if next_slot is None:
             self._status.configure(text="All 8 channel slots are in use.", text_color="orange")
             return
-        dlg = ChannelEditDialog(self, channel=empty_slot)
+
+        dlg = ChannelEditDialog(self, channel=next_slot)
         self.wait_window(dlg)
-        print(f"DEBUG: Dialog closed. dlg.result = {dlg.result}")
         if dlg.result:
-            print(f"DEBUG: Calling _save_channel with index={empty_slot['index']}, result={dlg.result}")
-            self._save_channel(empty_slot["index"], dlg.result)
-        else:
-            print(f"DEBUG: No result from dialog")
+            self._save_channel(next_slot["index"], dlg.result)
 
     def _edit_channel(self, ch: dict):
         if not self.connection.is_connected:
@@ -1024,6 +1027,8 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
                 # Reload channels from device
                 channels = self.connection.get_channels()
                 self.after(0, lambda: self.load_channels(channels))
+                if self._on_channels_changed:
+                    self.after(0, lambda: self._on_channels_changed(channels))
             self.after(0, lambda: self._status.configure(text=msg, text_color=color))
             self.after(5000, lambda: self._status.configure(text="", text_color="gray"))
 
@@ -1048,6 +1053,8 @@ class ChannelConfigTab(ctk.CTkScrollableFrame):
             if ok:
                 channels = self.connection.get_channels()
                 self.after(0, lambda: self.load_channels(channels))
+                if self._on_channels_changed:
+                    self.after(0, lambda: self._on_channels_changed(channels))
             self.after(0, lambda: self._status.configure(text=msg, text_color=color))
             self.after(5000, lambda: self._status.configure(text="", text_color="gray"))
 
@@ -1203,9 +1210,12 @@ class SettingsView(ctk.CTkFrame):
     Channels, Module Config, and Device Actions.
     """
 
-    def __init__(self, parent, connection: MeshConnection, **kwargs):
+    def __init__(self, parent, connection: MeshConnection,
+                 on_channels_changed: Optional[Callable[[List[Dict]], None]] = None,
+                 **kwargs):
         super().__init__(parent, **kwargs)
         self.connection = connection
+        self._on_channels_changed = on_channels_changed
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         self._build_ui()
@@ -1267,7 +1277,11 @@ class SettingsView(ctk.CTkFrame):
         ch_tab = self.tabs.tab("Channels")
         ch_tab.grid_columnconfigure(0, weight=1)
         ch_tab.grid_rowconfigure(0, weight=1)
-        self.channel_tab = ChannelConfigTab(ch_tab, self.connection)
+        self.channel_tab = ChannelConfigTab(
+            ch_tab,
+            self.connection,
+            on_channels_changed=self._on_channels_changed
+        )
         self.channel_tab.grid(row=0, column=0, sticky="nsew")
 
         # Module Config tab
@@ -1311,6 +1325,8 @@ class SettingsView(ctk.CTkFrame):
                 if module_cfg:
                     self.module_config_tab.load_config(module_cfg)
                 self.channel_tab.load_channels(channels)
+                if self._on_channels_changed:
+                    self._on_channels_changed(channels)
 
             self.after(0, _apply)
 

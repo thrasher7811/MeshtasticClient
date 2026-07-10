@@ -354,31 +354,95 @@ class MeshConnection:
             local_node = self._interface.localNode
             if not local_node:
                 return [{"index": 0, "name": "Primary", "role": 1, "psk": "AQ=="}]
-            channels = getattr(local_node, "channels", None)
-            result = []
-            items = channels.values() if isinstance(channels, dict) else (channels or [])
-            for ch in items:
-                role = getattr(ch, "role", 0)
-                settings = getattr(ch, "settings", None)
-                name = getattr(settings, "name", "") if settings else ""
-                index = getattr(ch, "index", 0)
-                psk = getattr(settings, "psk", b"") if settings else b""
-                # Encode PSK as base64 for display/editing
-                psk_b64 = base64.b64encode(psk).decode() if psk else ""
-                if not name and role == 1:
-                    name = "Primary"
-                result.append({
-                    "index": index,
-                    "name":  name,
-                    "role":  role,
-                    "psk":   psk_b64,
-                })
-            result.sort(key=lambda c: c["index"])
+            def _build_slot_model() -> List[Dict[str, Any]]:
+                channels = getattr(local_node, "channels", None)
+                by_index: Dict[int, Dict[str, Any]] = {}
+
+                if isinstance(channels, dict):
+                    raw_items = list(channels.items())
+                else:
+                    raw_items = list(enumerate(channels or []))
+
+                for pos, ch in raw_items:
+                    role = int(getattr(ch, "role", 0))
+                    settings = getattr(ch, "settings", None)
+                    name = getattr(settings, "name", "") if settings else ""
+                    psk = getattr(settings, "psk", b"") if settings else b""
+
+                    ch_index = getattr(ch, "index", None)
+                    try:
+                        ch_index = int(ch_index)
+                    except Exception:
+                        ch_index = None
+
+                    # Fall back to container position/key if protobuf index is unset/invalid/duplicate.
+                    if ch_index is None or ch_index < 0 or ch_index > 7 or ch_index in by_index:
+                        try:
+                            ch_index = int(pos)
+                        except Exception:
+                            continue
+
+                    psk_b64 = base64.b64encode(psk).decode() if psk else ""
+                    if not name and role == 1:
+                        name = "Primary"
+
+                    by_index[ch_index] = {
+                        "index": ch_index,
+                        "name": name,
+                        "role": role,
+                        "psk": psk_b64,
+                    }
+
+                result = []
+                for idx in range(8):
+                    entry = by_index.get(idx)
+                    if entry is None:
+                        if idx == 0:
+                            entry = {"index": 0, "name": "Primary", "role": 1, "psk": "AQ=="}
+                        else:
+                            entry = {"index": idx, "name": "", "role": 0, "psk": ""}
+                    result.append(entry)
+                return result
+
+            result = _build_slot_model()
+
+            # If only primary is visible, force-refresh channels from the node once.
+            active_count = sum(1 for ch in result if ch.get("role", 0) != 0)
+            if active_count <= 1:
+                req_channels = getattr(local_node, "requestChannels", None)
+                wait_cfg = getattr(local_node, "waitForConfig", None)
+                if callable(req_channels):
+                    try:
+                        req_channels(0)
+                        if callable(wait_cfg):
+                            wait_cfg("channels")
+                        result = _build_slot_model()
+                    except Exception as e:
+                        self._log(f"Channel refresh request failed: {e}")
+
             if result:
                 return result
         except Exception as e:
             self._log(f"Error getting channels: {e}")
         return [{"index": 0, "name": "Primary", "role": 1, "psk": "AQ=="}]
+
+    def _resolve_channel_slot(self, local_node, index: int):
+        """Resolve a channel slot object by index across meshtastic channel representations."""
+        getter = getattr(local_node, "getChannelByChannelIndex", None)
+        if callable(getter):
+            try:
+                ch = getter(index)
+                if ch is not None:
+                    return ch
+            except Exception:
+                pass
+
+        channels = getattr(local_node, "channels", None)
+        if isinstance(channels, dict):
+            return channels.get(index) or channels.get(str(index))
+        if isinstance(channels, list) and 0 <= index < len(channels):
+            return channels[index]
+        return None
 
     def save_channel(self, index: int, name: str, role: int, psk_bytes: bytes) -> tuple:
         """Write a channel slot to the device."""
@@ -386,10 +450,9 @@ class MeshConnection:
             return False, "Not connected"
         try:
             local_node = self._interface.localNode
-            channels = getattr(local_node, "channels", {})
-            if index not in channels:
+            ch = self._resolve_channel_slot(local_node, index)
+            if ch is None:
                 return False, f"Channel slot {index} not found on device"
-            ch = channels[index]
             ch.role = role
             ch.settings.name = name
             ch.settings.psk = psk_bytes
@@ -408,10 +471,9 @@ class MeshConnection:
             return False, "Cannot delete the Primary channel"
         try:
             local_node = self._interface.localNode
-            channels = getattr(local_node, "channels", {})
-            if index not in channels:
+            ch = self._resolve_channel_slot(local_node, index)
+            if ch is None:
                 return False, f"Channel slot {index} not found"
-            ch = channels[index]
             ch.role = 0  # DISABLED
             ch.settings.name = ""
             ch.settings.psk = b""

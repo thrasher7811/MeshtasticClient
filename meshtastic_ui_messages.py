@@ -4,6 +4,7 @@ Supports multi-channel chat and direct messages.
 """
 
 import time
+import threading
 import customtkinter as ctk
 from typing import Optional, List, Dict, Callable
 from meshtastic_core import MeshConnection, MeshMessage, ConnectionState, MeshNode
@@ -78,6 +79,7 @@ class MessagesView(ctk.CTkFrame):
         self.connection = connection
         self._node_refresh_ms = 30_000
         self._node_refresh_job: Optional[str] = None
+        self._channel_refresh_inflight = False
         self._channels: List[Dict] = [{"index": 0, "name": "Primary"}]
         self._active_channel: int = 0
         self._dm_node: Optional[int] = None  # Node ID for direct messages
@@ -94,7 +96,9 @@ class MessagesView(ctk.CTkFrame):
         # Left panel: channel list
         self.left_panel = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.left_panel.grid(row=0, column=0, sticky="nsew")
-        self.left_panel.grid_rowconfigure(2, weight=1)
+        # Give both channel and DM lists vertical space so channel buttons are not clipped.
+        self.left_panel.grid_rowconfigure(1, weight=3)
+        self.left_panel.grid_rowconfigure(3, weight=2)
         self.left_panel.grid_propagate(False)
 
         ctk.CTkLabel(self.left_panel, text="CHANNELS",
@@ -172,7 +176,8 @@ class MessagesView(ctk.CTkFrame):
         self._render_dm_list()
 
     def _manual_refresh_nodes(self):
-        """Manually refresh the nodes list."""
+        """Manually refresh channel and node lists."""
+        self.refresh_channels()
         self._refresh_nodes_from_connection()
 
     def _render_channel_list(self):
@@ -180,13 +185,14 @@ class MessagesView(ctk.CTkFrame):
         for widget in self.channel_frame.winfo_children():
             widget.destroy()
 
-        for ch in self._channels:
+        channels_sorted = sorted(self._channels, key=lambda ch: int(ch.get("index", 0)))
+        for ch in channels_sorted:
             if ch.get("role", 0) == 0:
                 continue  # skip disabled slots
             ch_index = ch["index"]
             ch_name = ch.get("name") or ("Primary" if ch["role"] == 1 else f"Channel {ch_index}")
 
-            btn_color = ("gray75", "gray25") if ch_index == self._active_channel else ("transparent", "transparent")
+            btn_color = ("gray75", "gray25") if ch_index == self._active_channel else "transparent"
 
             btn = ctk.CTkButton(
                 self.channel_frame,
@@ -358,44 +364,60 @@ class MessagesView(ctk.CTkFrame):
     def _add_message_bubble(self, msg: MeshMessage, row: int, my_id: Optional[int]):
         """Add a single message bubble to the message frame."""
         is_mine = msg.is_mine or (my_id and msg.from_id == my_id)
-
-        bubble_frame = ctk.CTkFrame(self.msg_frame, corner_radius=8)
-        bubble_frame.grid(row=row, column=0, sticky="ew", padx=8, pady=3)
-        bubble_frame.grid_columnconfigure(0, weight=1)
-
-        # Sender name
-        if is_mine:
-            sender = "You"
-        else:
-            sender = self._get_node_name(msg.from_id)
-
-        sender_color = ("#1d6fa8", "#4da3e0") if is_mine else ("gray50", "gray60")
         time_str = time.strftime("%H:%M", time.localtime(msg.timestamp))
 
-        header_frame = ctk.CTkFrame(bubble_frame, fg_color="transparent")
-        header_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 0))
-        header_frame.grid_columnconfigure(0, weight=1)
+        if is_mine:
+            bubble_color = ("#1d6fa8", "#1a5a8a")
+            align = "e"
+            text_color = ("white", "white")
+            text_justify = "right"
+        else:
+            bubble_color = ("gray80", "gray28")
+            align = "w"
+            text_color = ("black", "white")
+            text_justify = "left"
 
-        ctk.CTkLabel(header_frame, text=sender,
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=sender_color).grid(row=0, column=0, sticky="w")
+        bubble_frame = ctk.CTkFrame(self.msg_frame, corner_radius=14, fg_color=bubble_color)
+        bubble_frame.grid(row=row, column=0, sticky=align, padx=(8, 8), pady=3)
+        bubble_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(header_frame, text=time_str,
-                     font=ctk.CTkFont(size=10),
-                     text_color="gray").grid(row=0, column=1, sticky="e")
+        inner_row = 0
+
+        # Sender name — only shown for others' messages
+        if not is_mine:
+            sender = self._get_node_name(msg.from_id)
+            ctk.CTkLabel(bubble_frame, text=sender,
+                         font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color=("gray35", "gray60"),
+                         anchor="w").grid(row=inner_row, column=0, sticky="w", padx=12, pady=(7, 0))
+            inner_row += 1
 
         # Message text
         ctk.CTkLabel(bubble_frame, text=msg.text,
                      font=ctk.CTkFont(size=13),
-                     wraplength=500, justify="left", anchor="w").grid(
-            row=1, column=0, padx=8, pady=(2, 4), sticky="ew")
+                     text_color=text_color,
+                     wraplength=380, justify=text_justify,
+                     anchor="w" if not is_mine else "e").grid(
+            row=inner_row, column=0,
+            sticky="ew", padx=12,
+            pady=(7 if is_mine else 4, 2))
+        inner_row += 1
 
-        # SNR/RSSI if available
+        # Timestamp row
+        ts_anchor = "e" if is_mine else "w"
+        ctk.CTkLabel(bubble_frame, text=time_str,
+                     font=ctk.CTkFont(size=9),
+                     text_color=("gray60", "gray55")).grid(
+            row=inner_row, column=0, sticky=ts_anchor, padx=12, pady=(0, 6))
+        inner_row += 1
+
+        # SNR/RSSI for received messages
         if not is_mine and (msg.snr != 0 or msg.rssi != 0):
             info_text = f"SNR: {msg.snr:.1f}dB  RSSI: {msg.rssi}dBm"
             ctk.CTkLabel(bubble_frame, text=info_text,
-                         font=ctk.CTkFont(size=10), text_color="gray").grid(
-                row=2, column=0, padx=8, pady=(0, 4), sticky="w")
+                         font=ctk.CTkFont(size=10),
+                         text_color=("gray45", "gray55")).grid(
+                row=inner_row, column=0, sticky="w", padx=12, pady=(0, 6))
 
     def _get_node_name(self, node_id: int) -> str:
         """Get display name for a node ID."""
@@ -433,18 +455,65 @@ class MessagesView(ctk.CTkFrame):
             relevant = True
 
         if relevant:
-            self._add_message_bubble(msg, len(self.msg_frame.winfo_children()), my_id)
+            # Remove the "no messages" placeholder if it is still showing
+            children = self.msg_frame.winfo_children()
+            if len(children) == 1 and isinstance(children[0], ctk.CTkLabel):
+                children[0].destroy()
+                children = []
+            self._add_message_bubble(msg, len(children), my_id)
             self.after(50, self._scroll_to_bottom)
 
-    def refresh_channels(self):
-        """Refresh channel list from device."""
-        if self.connection.is_connected:
-            channels = self.connection.get_channels()
-            if channels:
-                self._channels = channels
-            else:
-                self._channels = [{"index": 0, "name": "Primary"}]
+    def _apply_channels(self, channels: Optional[List[Dict]]):
+        if channels:
+            self._channels = channels
+        else:
+            self._channels = [{"index": 0, "name": "Primary", "role": 1, "psk": "AQ=="}]
+
+        active_channels = [ch for ch in self._channels if ch.get("role", 0) != 0]
+        active_indices = {ch.get("index", 0) for ch in active_channels}
+        if self._active_channel not in active_indices:
+            fallback = next((ch for ch in active_channels if ch.get("index", 0) == 0), None)
+            if fallback is None and active_channels:
+                fallback = active_channels[0]
+            if fallback is not None:
+                self._active_channel = fallback.get("index", 0)
+                if self._dm_node is None:
+                    fallback_name = fallback.get("name") or (
+                        "Primary" if fallback.get("role", 0) == 1 else f"Channel {self._active_channel}"
+                    )
+                    self.header_label.configure(text=f"# {fallback_name}")
+
         self._render_channel_list()
+        if self._dm_node is None:
+            self._render_messages()
+
+    def refresh_channels(self, channels: Optional[List[Dict]] = None):
+        """Refresh channel list from device."""
+        if channels is not None:
+            self._apply_channels(channels)
+            return
+
+        if not self.connection.is_connected:
+            self._apply_channels(None)
+            return
+
+        if self._channel_refresh_inflight:
+            return
+        self._channel_refresh_inflight = True
+
+        def _do():
+            try:
+                latest = self.connection.get_channels()
+            except Exception:
+                latest = None
+
+            def _finish():
+                self._channel_refresh_inflight = False
+                self._apply_channels(latest)
+
+            self.after(0, _finish)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def refresh_nodes(self, nodes: Dict):
         """Update known nodes for DM list."""
