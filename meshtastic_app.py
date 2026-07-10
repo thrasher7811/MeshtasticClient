@@ -4,7 +4,9 @@ Provides sidebar navigation and manages all views.
 """
 
 import tkinter as tk
+import threading
 import customtkinter as ctk
+from pathlib import Path
 from typing import Optional
 from meshtastic_core import MeshConnection, ConnectionState
 from meshtastic_ui_connect import ConnectionDialog, ConnectionStatusBar
@@ -23,6 +25,8 @@ NAV_ICONS = {
 }
 
 NAV_PAGES = ["Messages", "Map", "Nodes", "Settings"]
+DEFAULT_COLOR_THEME = "blue"
+CUSTOM_THEME_FILE = Path(__file__).resolve().parent / "theme.json"
 
 
 class Sidebar(ctk.CTkFrame):
@@ -88,7 +92,7 @@ class Sidebar(ctk.CTkFrame):
         self.theme_var = ctk.StringVar(value="Dark")
         theme_menu = ctk.CTkOptionMenu(
             theme_frame,
-            values=["Dark", "Light", "System"],
+            values=["Dark", "Light", "System", "Custom"],
             variable=self.theme_var,
             width=100,
             command=self._change_theme,
@@ -126,6 +130,12 @@ class Sidebar(ctk.CTkFrame):
                 btn.configure(fg_color="transparent")
 
     def _change_theme(self, choice: str):
+        if choice == "Custom":
+            ctk.set_default_color_theme(str(CUSTOM_THEME_FILE))
+            ctk.set_appearance_mode("dark")
+            return
+
+        ctk.set_default_color_theme(DEFAULT_COLOR_THEME)
         ctk.set_appearance_mode(choice)
 
     def _toggle_connection(self):
@@ -203,7 +213,7 @@ class MeshtasticApp(ctk.CTk):
 
         # Set appearance
         ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+        ctk.set_default_color_theme(DEFAULT_COLOR_THEME)
 
         # Core connection object
         self.connection = MeshConnection()
@@ -255,7 +265,11 @@ class MeshtasticApp(ctk.CTk):
         self.views["Messages"] = MessagesView(self.content, self.connection)
         self.views["Map"] = MapView(self.content, self.connection)
         self.views["Nodes"] = NodesView(self.content, self.connection)
-        self.views["Settings"] = SettingsView(self.content, self.connection)
+        self.views["Settings"] = SettingsView(
+            self.content,
+            self.connection,
+            on_channels_changed=self._on_channels_changed
+        )
 
         for view in self.views.values():
             view.grid(row=0, column=0, sticky="nsew")
@@ -287,6 +301,9 @@ class MeshtasticApp(ctk.CTk):
             else:
                 view.grid_remove()
 
+        if page == "Messages" and self.connection.is_connected:
+            self._refresh_channels_from_device()
+
     def _open_connect_dialog(self):
         dialog = ConnectionDialog(
             self,
@@ -301,6 +318,9 @@ class MeshtasticApp(ctk.CTk):
             self.views["Messages"].on_connected()
         if hasattr(self.views.get("Settings"), "on_connected"):
             self.views["Settings"].on_connected()
+        # Meshtastic channel data can arrive shortly after initial connect.
+        self._refresh_channels_from_device()
+        self.after(1500, self._refresh_channels_from_device)
         # Refresh nodes immediately after connecting
         if self.connection.is_connected:
             nodes_raw = {}
@@ -319,6 +339,8 @@ class MeshtasticApp(ctk.CTk):
         self.sidebar.update_connection_state(state, msg)
         if state == ConnectionState.CONNECTED:
             self._on_log("Device connected")
+            self._refresh_channels_from_device()
+            self.after(1500, self._refresh_channels_from_device)
         elif state == ConnectionState.DISCONNECTED:
             self._on_log("Device disconnected")
             if hasattr(self.views.get("Settings"), "on_disconnected"):
@@ -337,6 +359,31 @@ class MeshtasticApp(ctk.CTk):
             self.views["Map"].update_nodes(nodes_raw)
             self.views["Messages"].refresh_nodes(nodes_raw)
         self.after(0, update)
+
+    def _on_channels_changed(self, channels: list):
+        """Refresh message channel list when channel config is changed."""
+        self.views["Messages"].refresh_channels(channels)
+
+    def _refresh_channels_from_device(self):
+        """Fetch channels once and push to both Settings and Messages views."""
+        if not self.connection.is_connected:
+            return
+
+        def _do():
+            channels = self.connection.get_channels()
+
+            def _apply():
+                if not channels:
+                    return
+                if "Messages" in self.views:
+                    self.views["Messages"].refresh_channels(channels)
+                settings_view = self.views.get("Settings")
+                if settings_view and hasattr(settings_view, "channel_tab"):
+                    settings_view.channel_tab.load_channels(channels)
+
+            self.after(0, _apply)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_log(self, msg: str):
         """Add log message (thread-safe)."""

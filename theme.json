@@ -17,7 +17,7 @@
   "CTkFrame": {
     "fg_color": "#1E1E1E",
     "top_fg_color": "#1A1A1A",
-    "border_color": "#1A1A1A",
+    "border_color": "#b320a1",
     "border_width": 2,
     "corner_radius": 6
   },
@@ -79,6 +79,17 @@
     "text_color": "#FFFFFF",
     "text_color_disabled": "#6B6B6B",
     "border_color": "#1A1A1A",
+    "border_width": 2,
+    "corner_radius": 6
+  },
+
+  "CTkComboBox": {
+    "fg_color": "#2B2B2B",
+    "border_color": "#1A1A1A",
+    "button_color": "#A020F0",
+    "button_hover_color": "#8B1CCB",
+    "text_color": "#FFFFFF",
+    "text_color_disabled": "#6B6B6B",
     "border_width": 2,
     "corner_radius": 6
   },

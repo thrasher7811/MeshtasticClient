@@ -4,6 +4,7 @@ Shows all discovered mesh nodes with signal, battery, position info.
 """
 
 import time
+from datetime import datetime
 import customtkinter as ctk
 from typing import Dict, Optional, Callable
 from meshtastic_core import MeshConnection, MeshNode
@@ -112,6 +113,32 @@ HW_MODEL_NAMES = {
 }
 
 
+def format_role_name(role_value):
+    if role_value is None:
+        return "Unknown"
+    try:
+        return ROLE_NAMES.get(int(role_value), f"Role {role_value}")
+    except Exception:
+        return str(role_value)
+
+
+def format_hw_model_name(hw_value):
+    if hw_value in (None, ""):
+        return "Unknown"
+    if isinstance(hw_value, str):
+        return hw_value
+    try:
+        return HW_MODEL_NAMES.get(int(hw_value), f"Unknown ({hw_value})")
+    except Exception:
+        return str(hw_value)
+
+
+def format_bool_name(value):
+    if value is None:
+        return None
+    return "Yes" if value else "No"
+
+
 class NodeCard(ctk.CTkFrame):
     """Card widget displaying information about a single mesh node."""
 
@@ -166,11 +193,8 @@ class NodeCard(ctk.CTkFrame):
                          text_color="gray").grid(row=0, column=1, padx=(6, 0))
 
         # Node ID + HW model
-        hw = HW_MODEL_NAMES.get(
-            getattr(self.node.raw.get("user", {}), "hwModel", 0), "Unknown"
-        )
-        if hasattr(self.node, "hw_model"):
-            hw = self.node.hw_model if self.node.hw_model else "Unknown"
+        user = self.node.raw.get("user", {}) if isinstance(self.node.raw, dict) else {}
+        hw = format_hw_model_name(user.get("hwModel", getattr(self.node, "hw_model", None)))
 
         ctk.CTkLabel(self, text=f"{self.node.node_id}  •  {hw}",
                      font=ctk.CTkFont(size=11),
@@ -239,36 +263,254 @@ class NodeDetailPanel(ctk.CTkFrame):
         for widget in self.content.winfo_children():
             widget.destroy()
 
-        fields = [
+        sections = self._build_sections(node)
+        if not sections:
+            self._show_empty()
+            return
+
+        for row, (title, fields) in enumerate(sections):
+            section = ctk.CTkFrame(self.content, corner_radius=8)
+            section.grid(row=row, column=0, padx=12, pady=(0, 12), sticky="ew")
+            section.grid_columnconfigure(1, weight=1)
+
+            ctk.CTkLabel(
+                section,
+                text=title,
+                font=ctk.CTkFont(size=13, weight="bold"),
+                anchor="w"
+            ).grid(row=0, column=0, columnspan=2, padx=12, pady=(10, 6), sticky="w")
+
+            for idx, (label, value) in enumerate(fields, start=1):
+                ctk.CTkLabel(
+                    section,
+                    text=label + ":",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    anchor="w"
+                ).grid(row=idx, column=0, padx=12, pady=(0, 4), sticky="nw")
+                ctk.CTkLabel(
+                    section,
+                    text=str(value),
+                    font=ctk.CTkFont(size=11),
+                    anchor="w",
+                    justify="left",
+                    wraplength=200,
+                    text_color="gray"
+                ).grid(row=idx, column=1, padx=12, pady=(0, 4), sticky="w")
+
+    def _build_sections(self, node: MeshNode):
+        raw = node.raw if isinstance(node.raw, dict) else {}
+        user = raw.get("user", {}) if isinstance(raw.get("user", {}), dict) else {}
+        metadata = raw.get("metadata", {}) if isinstance(raw.get("metadata", {}), dict) else {}
+        device_metrics = raw.get("deviceMetrics", {}) if isinstance(raw.get("deviceMetrics", {}), dict) else {}
+        position = raw.get("position", {}) if isinstance(raw.get("position", {}), dict) else {}
+        environment = raw.get("environmentMetrics", {}) if isinstance(raw.get("environmentMetrics", {}), dict) else {}
+        local_stats = raw.get("localStats", {}) if isinstance(raw.get("localStats", {}), dict) else {}
+
+        sections = []
+
+        identity_fields = []
+        identity_fields.extend(self._field_list([
             ("Long Name", node.long_name),
             ("Short Name", node.short_name),
             ("Node ID", node.node_id),
-            ("Node Num", f"0x{node.num:08x}" if node.num else "N/A"),
-            ("Hardware", node.hw_model),
+            ("Node Number", f"{node.num} / 0x{node.num:08x}"),
+            ("Hardware", format_hw_model_name(user.get("hwModel", node.hw_model))),
+            ("Role", format_role_name(user.get("role"))),
+            ("Favorite", format_bool_name(node.is_favorite)),
+            ("Licensed", format_bool_name(node.is_licensed)),
+            ("Public Key Match", self._status_value(user.get("keyMatch"))),
+            ("Signed Node", self._status_value(raw.get("hasXeddsaSigned") or raw.get("isSigned"))),
+            ("Messaging", "Unmonitored" if user.get("unmessagable") else "Allowed"),
+        ]))
+        self._add_section(sections, "Identity", identity_fields)
+
+        radio_fields = []
+        radio_fields.extend(self._field_list([
+            ("Last Heard", self._format_epoch(node.last_heard)),
+            ("First Heard", self._format_epoch(raw.get("firstHeard"))),
+            ("Hops Away", raw.get("hopsAway")),
+            ("Via MQTT", format_bool_name(raw.get("viaMqtt"))),
+            ("SNR", f"{node.snr:.1f} dB" if node.snr is not None else None),
+            ("RSSI", f"{raw.get('rssi')} dB" if raw.get("rssi") is not None else None),
+            ("Channel", raw.get("channel")),
+        ]))
+        self._add_section(sections, "Radio Status", radio_fields)
+
+        device_fields = []
+        device_fields.extend(self._field_list([
             ("Battery", node.battery_str),
-            ("Voltage", f"{node.voltage:.2f}V" if node.voltage else "N/A"),
-            ("SNR", f"{node.snr:.1f} dB" if node.snr is not None else "N/A"),
-            ("Last Heard", node.last_heard_str),
-            ("Channel Util.", f"{node.channel_utilization:.1f}%" if node.channel_utilization else "N/A"),
-            ("Air Util TX", f"{node.air_util_tx:.1f}%" if node.air_util_tx else "N/A"),
+            ("Voltage", self._format_float(node.voltage, "V", digits=2)),
+            ("Channel Util.", self._format_percent(node.channel_utilization)),
+            ("Air Util TX", self._format_percent(node.air_util_tx)),
             ("Uptime", self._format_uptime(node.uptime_seconds)),
-        ]
+        ]))
+        device_fields.extend(self._dict_fields(device_metrics, [
+            ("batteryLevel", "Battery Level", self._format_percent),
+            ("voltage", "Voltage", lambda v: self._format_float(v, "V", digits=2)),
+            ("channelUtilization", "Channel Util.", self._format_percent),
+            ("airUtilTx", "Air Util TX", self._format_percent),
+            ("uptimeSeconds", "Uptime Seconds", self._format_uptime),
+        ]))
+        self._add_section(sections, "Device Metrics", device_fields)
 
-        if node.has_position:
-            fields += [
-                ("Latitude", f"{node.latitude:.6f}°"),
-                ("Longitude", f"{node.longitude:.6f}°"),
-                ("Altitude", f"{node.altitude}m" if node.altitude else "N/A"),
-            ]
+        position_fields = []
+        position_fields.extend(self._field_list([
+            ("Latitude", self._format_float(node.latitude, "°", digits=6)),
+            ("Longitude", self._format_float(node.longitude, "°", digits=6)),
+            ("Altitude", self._format_float(node.altitude, "m", digits=0)),
+        ]))
+        position_fields.extend(self._dict_fields(position, [
+            ("latitude", "Latitude", lambda v: self._format_float(v, "°", digits=6)),
+            ("longitude", "Longitude", lambda v: self._format_float(v, "°", digits=6)),
+            ("altitude", "Altitude", lambda v: self._format_float(v, "m", digits=0)),
+            ("precision", "Precision", lambda v: self._format_float(v, "m", digits=0)),
+            ("heading", "Heading", lambda v: self._format_float(v, "°", digits=0)),
+            ("speed", "Speed", lambda v: self._format_float(v, "m/s", digits=1)),
+        ]))
+        self._add_section(sections, "Position", position_fields)
 
-        for row, (label, value) in enumerate(fields):
-            ctk.CTkLabel(self.content, text=label + ":",
-                         font=ctk.CTkFont(size=12, weight="bold"),
-                         anchor="w").grid(row=row*2, column=0, padx=12, pady=(6, 0), sticky="w")
-            ctk.CTkLabel(self.content, text=str(value),
-                         font=ctk.CTkFont(size=12),
-                         anchor="w", text_color="gray").grid(
-                row=row*2+1, column=0, padx=12, pady=(0, 0), sticky="w")
+        environment_fields = self._dict_fields(environment, None)
+        self._add_section(sections, "Environment Metrics", environment_fields)
+
+        local_stats_fields = self._dict_fields(local_stats, None)
+        self._add_section(sections, "Local Stats", local_stats_fields)
+
+        metadata_fields = self._field_list([
+            ("Firmware Version", metadata.get("firmwareVersion")),
+            ("Metadata Version", metadata.get("version")),
+        ])
+        metadata_fields.extend(self._dict_fields(metadata, [
+            ("firmwareVersion", "Firmware Version", None),
+            ("version", "Metadata Version", None),
+        ]))
+        self._add_section(sections, "Metadata", metadata_fields)
+
+        extra_fields = self._field_list([
+            ("Raw Keys", ", ".join(sorted(raw.keys())) if raw else None),
+        ])
+        self._add_section(sections, "Available Data", extra_fields)
+
+        return sections
+
+    def _field_list(self, pairs):
+        fields = []
+        for label, value in pairs:
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if value.strip() == "":
+                    continue
+            fields.append((label, value))
+        return fields
+
+    def _add_section(self, sections, title, fields):
+        if fields:
+            sections.append((title, fields))
+
+    def _dict_fields(self, data, field_specs):
+        if not isinstance(data, dict) or not data:
+            return []
+        fields = []
+        if field_specs:
+            for key, label, formatter in field_specs:
+                if key not in data:
+                    continue
+                value = data.get(key)
+                if value is None:
+                    continue
+                if formatter:
+                    rendered = formatter(value)
+                else:
+                    rendered = self._format_value(value)
+                if rendered is not None:
+                    fields.append((label, rendered))
+
+        if not field_specs:
+            skip_keys = set()
+        else:
+            skip_keys = {item[0] for item in field_specs}
+
+        for key in sorted(data.keys()):
+            if key in skip_keys:
+                continue
+            value = data.get(key)
+            if value is None:
+                continue
+            rendered = self._format_value(value)
+            if rendered is None:
+                continue
+            fields.append((self._labelize(key), rendered))
+        return fields
+
+    def _labelize(self, value):
+        text = str(value)
+        parts = []
+        current = []
+        for char in text:
+            if char.isupper() and current:
+                parts.append("".join(current))
+                current = [char]
+            elif char in {"_", "-", "."}:
+                if current:
+                    parts.append("".join(current))
+                    current = []
+            else:
+                current.append(char)
+        if current:
+            parts.append("".join(current))
+        return " ".join(part.capitalize() if part.islower() else part for part in parts) if parts else text
+
+    def _format_value(self, value):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, (int, float)):
+            if isinstance(value, float):
+                return f"{value:g}"
+            return str(value)
+        if isinstance(value, dict):
+            if not value:
+                return None
+            return ", ".join(f"{self._labelize(k)}={self._format_value(v)}" for k, v in value.items() if self._format_value(v) is not None)
+        if isinstance(value, (list, tuple, set)):
+            rendered = [self._format_value(v) for v in value if self._format_value(v) is not None]
+            return ", ".join(rendered) if rendered else None
+        text = str(value)
+        return text if text.strip() else None
+
+    def _status_value(self, value):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "Verified" if value else "Mismatch"
+        return self._format_value(value)
+
+    def _format_float(self, value, suffix="", digits=2):
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except Exception:
+            return self._format_value(value)
+        formatted = f"{number:.{digits}f}" if digits > 0 else f"{number:.0f}"
+        return f"{formatted}{suffix}"
+
+    def _format_percent(self, value):
+        if value is None:
+            return None
+        return self._format_float(value, "%", digits=1)
+
+    def _format_epoch(self, value):
+        if not value:
+            return None
+        try:
+            ts = float(value)
+        except Exception:
+            return self._format_value(value)
+        relative = MeshNode({"lastHeard": ts}).last_heard_str
+        absolute = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        return f"{relative} ({absolute})"
 
     def _format_uptime(self, seconds) -> str:
         if not seconds:
