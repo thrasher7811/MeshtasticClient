@@ -211,6 +211,11 @@ class MeshtasticApp(ctk.CTk):
         self.geometry("1100x720")
         self.minsize(800, 560)
 
+        icon_path = Path(__file__).resolve().parent / "appIcon.png"
+        self._icon = tk.PhotoImage(file=str(icon_path))
+        self._iconbitmap_method_called = True
+        self.wm_iconphoto(True, self._icon)
+
         # Set appearance
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme(DEFAULT_COLOR_THEME)
