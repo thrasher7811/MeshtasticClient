@@ -6,6 +6,7 @@ Provides sidebar navigation and manages all views.
 import tkinter as tk
 import threading
 import customtkinter as ctk
+from PIL import Image
 from pathlib import Path
 from typing import Optional
 from meshtastic_core import MeshConnection, ConnectionState
@@ -49,8 +50,16 @@ class Sidebar(ctk.CTkFrame):
         title_frame = ctk.CTkFrame(self, fg_color="transparent")
         title_frame.grid(row=0, column=0, padx=12, pady=(16, 8), sticky="ew")
 
-        ctk.CTkLabel(title_frame, text="📻",
-                     font=ctk.CTkFont(size=24)).grid(row=0, column=0, padx=(0, 8))
+        radio_img = ctk.CTkImage(
+            light_image=Image.open("mashtastic_logo.png"),
+            dark_image=Image.open("mashtastic_logo.png"),
+            size=(24, 24)   # match your old emoji size
+        )
+        ctk.CTkLabel(
+            title_frame,
+            image=radio_img,
+            text=""
+        ).grid(row=0, column=0, padx=(0, 8))
         ctk.CTkLabel(title_frame, text="Meshtastic",
                      font=ctk.CTkFont(size=15, weight="bold")).grid(row=0, column=1)
 
